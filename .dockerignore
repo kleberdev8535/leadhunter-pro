@@ -5,7 +5,8 @@ node_modules
 **/.env
 **/.env.*
 !**/.env.example
-apps/web
+apps/web/**
+!apps/web/package.json
 e2e
 test-results
 playwright-report
