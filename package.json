@@ -1,0 +1,20 @@
+{
+  "name": "leadhunter-pro",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "db:local": "npm run db:local -w @leadhunter/api",
+    "db:migrate": "npm run db:migrate -w @leadhunter/api",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @leadhunter/api\" \"npm run dev -w @leadhunter/web\"",
+    "build": "npm run build -w @leadhunter/api && npm run build -w @leadhunter/web",
+    "typecheck": "npm run typecheck -w @leadhunter/api && npm run typecheck -w @leadhunter/web",
+    "test": "npm run test -w @leadhunter/api && npm run test -w @leadhunter/web"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "concurrently": "^9.2.0"
+  }
+}

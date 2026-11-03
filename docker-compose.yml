@@ -1,0 +1,16 @@
+# Ambiente de desenvolvimento opcional (para máquinas com Docker).
+# Sem Docker, use: npm run db:local (PostgreSQL embarcado na porta 55433).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: leadhunter
+      POSTGRES_PASSWORD: leadhunter_dev
+      POSTGRES_DB: leadhunter
+    ports: ["55433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]
+volumes:
+  pgdata:

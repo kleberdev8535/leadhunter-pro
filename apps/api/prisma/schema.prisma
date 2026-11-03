@@ -1,0 +1,896 @@
+// LeadHunter Pro — schema principal.
+// Regra de tenant: toda entidade de negócio carrega organizationId e toda consulta filtra por ele.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Identidade e tenant ─────────────────────────────
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Organization {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(120)
+  slug      String    @unique @db.VarChar(80)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  memberships     Membership[]
+  sessions        Session[]
+  pipelines       Pipeline[]
+  stages          PipelineStage[]
+  leads           Lead[]
+  leadSources     LeadSource[]
+  activities      LeadActivity[]
+  notes           LeadNote[]
+  tags            Tag[]
+  tasks           Task[]
+  integrations    Integration[]
+  usage           IntegrationUsage[]
+  aiConfiguration AIConfiguration?
+  waConnections   WhatsAppConnection[]
+  waLogs          WhatsAppConnectionLog[]
+  waConversations WhatsAppConversation[]
+  waMessages      WhatsAppMessage[]
+  templates       MessageTemplate[]
+  searchJobs      SearchJob[]
+  searchResults   SearchResult[]
+  auditLogs       AuditLog[]
+  suppressions    SuppressionList[]
+  notifications   Notification[]
+  customFields    CustomFieldDefinition[]
+  settings        OrganizationSettings?
+  agents          Agent[]
+  agentTasks      AgentTask[]
+  teamRuns        TeamRun[]
+}
+
+model OrganizationSettings {
+  organizationId        String   @id @db.Uuid
+  dailySearchLimit      Int      @default(500) // máximo de lugares retornados por dia (controle de custo)
+  monthlyRequestBudget  Int      @default(2000) // máximo de requisições à Places API por mês
+  dailyMessageLimit     Int      @default(40)
+  messageIntervalSec    Int      @default(90)
+  maxUnansweredMessages Int      @default(3) // mensagens seguidas sem resposta antes de bloquear novos envios
+  favoriteNiches        String[] @default([])
+  updatedAt             DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  email            String    @unique @db.VarChar(254)
+  name             String    @db.VarChar(120)
+  passwordHash     String
+  avatarUrl        String?   @db.VarChar(500)
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  memberships   Membership[]
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  ownedLeads    Lead[]               @relation("LeadOwner")
+  activities    LeadActivity[]
+  notes         LeadNote[]
+  assignedTasks Task[]               @relation("TaskAssignee")
+  createdTasks  Task[]               @relation("TaskCreator")
+  searchJobs    SearchJob[]
+  auditLogs     AuditLog[]
+  templates     MessageTemplate[]
+  sentMessages  WhatsAppMessage[]
+  notifications Notification[]
+  suppressions  SuppressionList[]
+}
+
+model Membership {
+  id             String     @id @default(uuid()) @db.Uuid
+  userId         String     @db.Uuid
+  organizationId String     @db.Uuid
+  role           MemberRole @default(MEMBER)
+  createdAt      DateTime   @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  organizationId    String    @db.Uuid
+  refreshTokenHash  String    @unique
+  // Rotação: o token anterior só é aceito dentro da janela de tolerância; depois disso, reuso revoga a sessão.
+  previousTokenHash String?   @unique
+  userAgent         String?   @db.VarChar(400)
+  ip                String?   @db.VarChar(64)
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  rotatedAt         DateTime?
+  lastUsedAt        DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ───────────────────────────── CRM ─────────────────────────────
+
+enum StageKind {
+  OPEN
+  WON
+  LOST
+}
+
+model Pipeline {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String   @db.VarChar(80)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stages       PipelineStage[]
+  leads        Lead[]
+
+  @@index([organizationId])
+}
+
+model PipelineStage {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  pipelineId     String    @db.Uuid
+  key            String    @db.VarChar(40) // identificador estável usado nos relatórios (ex.: "meeting")
+  name           String    @db.VarChar(60)
+  position       Int
+  color          String    @default("#6366F1") @db.VarChar(9)
+  kind           StageKind @default(OPEN)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline     Pipeline     @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@unique([pipelineId, key])
+  @@index([organizationId])
+}
+
+enum LeadSourceType {
+  GOOGLE_MAPS
+  MANUAL
+  IMPORT
+}
+
+model LeadSource {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  type           LeadSourceType
+  label          String         @db.VarChar(120)
+  createdAt      DateTime       @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@unique([organizationId, type, label])
+}
+
+enum InterestLevel {
+  UNKNOWN
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ConsentBasis {
+  NONE
+  LEGITIMATE_INTEREST
+  CONSENT
+}
+
+model Lead {
+  id                 String        @id @default(uuid()) @db.Uuid
+  organizationId     String        @db.Uuid
+  pipelineId         String        @db.Uuid
+  stageId            String        @db.Uuid
+  ownerId            String?       @db.Uuid
+  sourceId           String?       @db.Uuid
+  companyName        String        @db.VarChar(200)
+  contactName        String?       @db.VarChar(120)
+  niche              String?       @db.VarChar(80)
+  category           String?       @db.VarChar(120)
+  address            String?       @db.VarChar(300)
+  neighborhood       String?       @db.VarChar(120)
+  city               String?       @db.VarChar(120)
+  state              String?       @db.VarChar(60)
+  country            String?       @db.VarChar(60)
+  phone              String?       @db.VarChar(40)
+  phoneE164          String?       @db.VarChar(20)
+  email              String?       @db.VarChar(254)
+  website            String?       @db.VarChar(500)
+  // null = a fonte não informou; false/true só quando confirmado. Ausência de websiteUri ≠ "não tem site".
+  websiteReported    Boolean?
+  googleMapsUrl      String?       @db.VarChar(500)
+  placeId            String?       @db.VarChar(300)
+  // Conteúdo da Places API tem prazo de cache; o placeId pode ser guardado indefinidamente.
+  placeDataFetchedAt DateTime?
+  rating             Float?
+  reviewCount        Int?
+  score              Int           @default(0)
+  scoreReasons       Json          @default("[]")
+  interest           InterestLevel @default(UNKNOWN)
+  consentBasis       ConsentBasis  @default(NONE)
+  position           Float         @default(0) // ordem dentro da coluna do Kanban
+  customFields       Json          @default("{}")
+  lastContactAt      DateTime?
+  convertedAt        DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  deletedAt          DateTime?
+
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pipeline      Pipeline               @relation(fields: [pipelineId], references: [id])
+  stage         PipelineStage          @relation(fields: [stageId], references: [id])
+  owner         User?                  @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  source        LeadSource?            @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  activities    LeadActivity[]
+  notes         LeadNote[]
+  tags          LeadTag[]
+  tasks         Task[]
+  conversations WhatsAppConversation[]
+  searchResults SearchResult[]
+
+  @@unique([organizationId, placeId])
+  @@index([organizationId, stageId, position])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, city])
+  @@index([organizationId, niche])
+  @@index([organizationId, phoneE164])
+  @@index([organizationId, deletedAt])
+}
+
+enum ActivityType {
+  LEAD_FOUND
+  LEAD_CREATED
+  LEAD_UPDATED
+  STAGE_CHANGED
+  QUALIFIED
+  MESSAGE_PREPARED
+  MESSAGE_SENT
+  REPLY_RECEIVED
+  INTEREST_SHOWN
+  MEETING_SCHEDULED
+  PROPOSAL_SENT
+  CONVERTED
+  LOST
+  NOTE_ADDED
+  TASK_CREATED
+  TASK_COMPLETED
+}
+
+model LeadActivity {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  leadId         String       @db.Uuid
+  actorId        String?      @db.Uuid
+  type           ActivityType
+  description    String       @db.VarChar(500)
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([leadId, createdAt])
+  @@index([organizationId, type, createdAt])
+}
+
+model LeadNote {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  leadId         String    @db.Uuid
+  authorId       String?   @db.Uuid
+  body           String    @db.VarChar(5000)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author       User?        @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+}
+
+model Tag {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String   @db.VarChar(40)
+  color          String   @default("#8B5CF6") @db.VarChar(9)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        LeadTag[]
+
+  @@unique([organizationId, name])
+}
+
+model LeadTag {
+  leadId    String   @db.Uuid
+  tagId     String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, tagId])
+  @@index([tagId])
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  BOOLEAN
+  SELECT
+}
+
+model CustomFieldDefinition {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  key            String          @db.VarChar(40)
+  label          String          @db.VarChar(80)
+  type           CustomFieldType
+  options        String[]        @default([])
+  createdAt      DateTime        @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+}
+
+enum TaskType {
+  CALL
+  FOLLOW_UP
+  MEETING
+  PROPOSAL
+  NEGOTIATION
+  OTHER
+}
+
+enum TaskStatus {
+  PENDING
+  DONE
+  CANCELED
+}
+
+model Task {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  leadId         String?    @db.Uuid
+  assigneeId     String?    @db.Uuid
+  createdById    String?    @db.Uuid
+  type           TaskType   @default(FOLLOW_UP)
+  title          String     @db.VarChar(200)
+  description    String?    @db.VarChar(2000)
+  dueAt          DateTime
+  status         TaskStatus @default(PENDING)
+  // Quando o lembrete foi gerado (evita notificar a mesma tarefa duas vezes).
+  notifiedAt     DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status, dueAt])
+  @@index([leadId])
+}
+
+model Notification {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  title          String    @db.VarChar(200)
+  body           String?   @db.VarChar(1000)
+  link           String?   @db.VarChar(300)
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+// ───────────────────────────── Integrações ─────────────────────────────
+
+enum IntegrationProvider {
+  GOOGLE_PLACES
+  WHATSAPP_CLOUD
+  WHATSAPP_QR
+  AI_OPENAI
+  AI_ANTHROPIC
+  AI_GEMINI
+}
+
+enum IntegrationStatus {
+  NOT_CONFIGURED
+  CONFIGURED
+  VALID
+  INVALID
+}
+
+model Integration {
+  id                   String              @id @default(uuid()) @db.Uuid
+  organizationId       String              @db.Uuid
+  provider             IntegrationProvider
+  status               IntegrationStatus   @default(NOT_CONFIGURED)
+  // Credenciais criptografadas com AES-256-GCM (ENCRYPTION_KEY). Nunca retornadas ao frontend.
+  encryptedCredentials String?
+  credentialHint       String?             @db.VarChar(20) // ex.: "…a9F2"
+  config               Json                @default("{}")
+  lastCheckedAt        DateTime?
+  lastError            String?             @db.VarChar(500)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  organization  Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  waConnections WhatsAppConnection[]
+
+  @@unique([organizationId, provider])
+}
+
+model IntegrationUsage {
+  id                  String              @id @default(uuid()) @db.Uuid
+  organizationId      String              @db.Uuid
+  provider            IntegrationProvider
+  day                 DateTime            @db.Date
+  requests            Int                 @default(0)
+  units               Int                 @default(0) // ex.: lugares retornados
+  estimatedCostMicros BigInt              @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider, day])
+}
+
+model AIConfiguration {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @unique @db.Uuid
+  provider       IntegrationProvider @default(AI_ANTHROPIC)
+  model          String              @db.VarChar(80)
+  temperature    Float               @default(0.6)
+  senderName     String?             @db.VarChar(80)
+  serviceOffered String?             @db.VarChar(300)
+  updatedAt      DateTime            @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────── WhatsApp ─────────────────────────────
+
+enum WhatsAppStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  RECONNECT_REQUIRED
+  ERROR
+}
+
+model WhatsAppConnection {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  integrationId  String?             @db.Uuid
+  provider       IntegrationProvider
+  status         WhatsAppStatus      @default(DISCONNECTED)
+  phoneNumber    String?             @db.VarChar(20)
+  displayName    String?             @db.VarChar(120)
+  externalId     String?             @db.VarChar(120) // phone_number_id (Cloud API) ou id da instância (QR)
+  lastSyncAt     DateTime?
+  lastError      String?             @db.VarChar(500)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organization  Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  integration   Integration?            @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  logs          WhatsAppConnectionLog[]
+  authKeys      WhatsAppAuthKey[]
+  conversations WhatsAppConversation[]
+
+  @@unique([provider, externalId])
+  @@index([organizationId])
+}
+
+model WhatsAppConnectionLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  connectionId   String   @db.Uuid
+  level          String   @db.VarChar(10)
+  message        String   @db.VarChar(1000)
+  createdAt      DateTime @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection   WhatsAppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, createdAt])
+}
+
+model WhatsAppConversation {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  connectionId   String    @db.Uuid
+  leadId         String?   @db.Uuid
+  contactPhone   String    @db.VarChar(20)
+  lastMessageAt  DateTime?
+  lastInboundAt  DateTime? // janela de 24h da Cloud API
+  unreadCount    Int       @default(0)
+  sequencePaused Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection   WhatsAppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  lead         Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  messages     WhatsAppMessage[]
+
+  @@unique([connectionId, contactPhone])
+  @@index([organizationId, lastMessageAt])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  DRAFT
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+model WhatsAppMessage {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  conversationId String           @db.Uuid
+  sentById       String?          @db.Uuid
+  direction      MessageDirection
+  body           String           @db.VarChar(4096)
+  templateName   String?          @db.VarChar(120)
+  status         MessageStatus
+  externalId     String?          @unique @db.VarChar(200)
+  idempotencyKey String?          @unique @db.VarChar(100)
+  error          String?          @db.VarChar(500)
+  sentAt         DateTime?
+  // Fila de envio: a mensagem só sai depois deste horário (respeita intervalo e limite diário).
+  sendAfter      DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentBy       User?                @relation(fields: [sentById], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([organizationId, direction, createdAt])
+  @@index([status, sendAfter])
+}
+
+enum TemplateKind {
+  INITIAL
+  NO_WEBSITE
+  OUTDATED_WEBSITE
+  FOLLOW_UP
+  PROPOSAL
+  MEETING
+  CLOSING
+  CUSTOM
+}
+
+model MessageTemplate {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  createdById    String?      @db.Uuid
+  name           String       @db.VarChar(120)
+  niche          String?      @db.VarChar(80)
+  kind           TemplateKind @default(CUSTOM)
+  body           String       @db.VarChar(4096)
+  waTemplateName String?      @db.VarChar(120) // template aprovado na Meta, quando exigido
+  language       String       @default("pt_BR") @db.VarChar(10)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, kind])
+}
+
+model SuppressionList {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  createdById    String?  @db.Uuid
+  phoneE164      String?  @db.VarChar(20)
+  email          String?  @db.VarChar(254)
+  reason         String   @db.VarChar(300)
+  source         String   @db.VarChar(40) // "opt_out", "manual", "bounce"
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, phoneE164])
+  @@unique([organizationId, email])
+}
+
+// ───────────────────────────── Busca Google Maps ─────────────────────────────
+
+enum SearchJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELED
+}
+
+model SearchJob {
+  id                  String          @id @default(uuid()) @db.Uuid
+  organizationId      String          @db.Uuid
+  createdById         String?         @db.Uuid
+  status              SearchJobStatus @default(QUEUED)
+  params              Json
+  requestedCount      Int
+  foundCount          Int             @default(0)
+  requestCount        Int             @default(0)
+  estimatedCostMicros BigInt          @default(0)
+  error               String?         @db.VarChar(500)
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime        @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  results      SearchResult[]
+
+  @@index([organizationId, createdAt])
+}
+
+model SearchResult {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  searchJobId    String   @db.Uuid
+  leadId         String?  @db.Uuid
+  placeId        String   @db.VarChar(300)
+  name           String   @db.VarChar(200)
+  data           Json
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  searchJob    SearchJob    @relation(fields: [searchJobId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@unique([searchJobId, placeId])
+  @@index([organizationId, placeId])
+}
+
+// ───────────────────────────── Auditoria ─────────────────────────────
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  userId         String?  @db.Uuid
+  action         String   @db.VarChar(60) // ex.: "auth.login", "auth.login_failed", "lead.delete"
+  entity         String?  @db.VarChar(60)
+  entityId       String?  @db.VarChar(100)
+  ip             String?  @db.VarChar(64)
+  userAgent      String?  @db.VarChar(400)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+// ───────────────────────────── Escritório de agentes ─────────────────────────────
+
+enum AgentKind {
+  HUNTER
+  SCOUT
+  ATLAS
+  WRITER
+  METRICS
+}
+
+enum AgentStatus {
+  IDLE
+  AVAILABLE
+  ASSIGNED
+  WORKING
+  WAITING
+  PAUSED
+  COMPLETED
+  ERROR
+  OFFLINE
+}
+
+enum AgentTaskType {
+  SEARCH_LEADS
+  QUALIFY_LEADS
+  IMPORT_TO_CRM
+  GENERATE_MESSAGES
+  GENERATE_REPORT
+  UPDATE_LEADS
+}
+
+enum AgentTaskStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Agent {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  kind           AgentKind
+  name           String      @db.VarChar(40)
+  status         AgentStatus @default(AVAILABLE)
+  // Pausar o agente impede que ele pegue novas tarefas da fila.
+  paused         Boolean     @default(false)
+  currentTaskId  String?     @db.Uuid
+  tasksCompleted Int         @default(0)
+  tasksFailed    Int         @default(0)
+  totalRunMs     BigInt      @default(0)
+  lastActiveAt   DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        AgentTask[]
+
+  @@unique([organizationId, kind])
+}
+
+model AgentTask {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  agentId        String          @db.Uuid
+  createdById    String?         @db.Uuid
+  taskType       AgentTaskType
+  title          String          @db.VarChar(200)
+  description    String?         @db.VarChar(1000)
+  parameters     Json
+  status         AgentTaskStatus @default(PENDING)
+  priority       Int             @default(5) // 1 = mais alta
+  progress       Int             @default(0)
+  // Estado intermediário para retomar após pausa (ex.: página atual da busca).
+  checkpoint     Json            @default("{}")
+  result         Json?
+  errorMessage   String?         @db.VarChar(1000)
+  retryCount     Int             @default(0)
+  maxRetries     Int             @default(3)
+  runAfter       DateTime        @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?         @db.VarChar(80)
+  // Pausa/cancelamento pedidos pelo usuário; o worker obedece no próximo ponto de verificação.
+  controlRequest String?         @db.VarChar(10)
+  idempotencyKey String?         @db.VarChar(100)
+  // Missão da equipe à qual esta tarefa pertence (null = tarefa avulsa) e a posição na sequência.
+  teamRunId      String?         @db.Uuid
+  stepIndex      Int?
+  createdAt      DateTime        @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  logs         AgentTaskLog[]
+  teamRun      TeamRun?       @relation(fields: [teamRunId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([status, runAfter, priority])
+  @@index([organizationId, createdAt])
+  @@index([agentId, status])
+}
+
+model AgentTaskLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  taskId         String   @db.Uuid
+  level          String   @db.VarChar(10)
+  message        String   @db.VarChar(1000)
+  createdAt      DateTime @default(now())
+
+  task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+/// Sessão do WhatsApp (QR Code) guardada no banco, criptografada, para sobreviver a reinícios/deploys.
+model WhatsAppAuthKey {
+  connectionId String   @db.Uuid
+  type         String   @db.VarChar(40)
+  keyId        String   @db.VarChar(200)
+  value        String
+  updatedAt    DateTime @updatedAt
+
+  connection WhatsAppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@id([connectionId, type, keyId])
+}
+
+/// Missão da equipe: Hunter → Scout → Atlas → Writer → Metrics, cada um iniciando quando o anterior conclui.
+model TeamRun {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  createdById    String?         @db.Uuid
+  title          String          @db.VarChar(200)
+  params         Json
+  status         AgentTaskStatus @default(RUNNING)
+  currentStep    Int             @default(0)
+  totalSteps     Int
+  summary        Json            @default("{}")
+  error          String?         @db.VarChar(1000)
+  idempotencyKey String?         @db.VarChar(100)
+  createdAt      DateTime        @default(now())
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        AgentTask[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, createdAt])
+}
