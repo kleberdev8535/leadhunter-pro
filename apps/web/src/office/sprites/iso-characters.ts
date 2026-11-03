@@ -9,7 +9,7 @@ import { makeCanvas, shade } from "./pixel";
 export const CHAR_W = 30;
 export const CHAR_H = 56;
 export const CHAR_COLS = 6;
-export const CHAR_ROWS = 2;
+export const CHAR_ROWS = 3;
 
 export const ISO_FRAMES = {
   frontStand: 0,
@@ -20,6 +20,10 @@ export const ISO_FRAMES = {
   type: [7, 8],
   celebrate: [9, 10],
   wave: 11,
+  // Respiração: o tronco e a cabeça descem 1px (pés parados), para ninguém parecer uma foto.
+  frontBreath: 12,
+  backBreath: 13,
+  sitBreath: 14,
 } as const;
 
 export interface Look {
@@ -202,7 +206,15 @@ function figure(look: Look, view: "front" | "back", legs: Legs, arms: Arms, dy =
   return out;
 }
 
-/** Gera a folha 6×2 de um agente (180×112 px). */
+/** Copia o quadro descendo 1px tudo acima de `splitY` (cintura), mantendo pernas e pés no lugar. */
+function breathe(src: HTMLCanvasElement, splitY: number): HTMLCanvasElement {
+  const [c, ctx] = makeCanvas(CHAR_W, CHAR_H);
+  ctx.drawImage(src, 0, splitY, CHAR_W, CHAR_H - splitY, 0, splitY, CHAR_W, CHAR_H - splitY);
+  ctx.drawImage(src, 0, 0, CHAR_W, splitY, 0, 1, CHAR_W, splitY);
+  return c;
+}
+
+/** Gera a folha 6×3 de um agente (180×168 px). */
 export function buildIsoCharacterSheet(look: Look): HTMLCanvasElement {
   const [canvas, ctx] = makeCanvas(CHAR_W * CHAR_COLS, CHAR_H * CHAR_ROWS);
   const frames: HTMLCanvasElement[] = [
@@ -219,6 +231,7 @@ export function buildIsoCharacterSheet(look: Look): HTMLCanvasElement {
     figure(look, "front", "stand", "up", 0),
     figure(look, "front", "stand", "wave"),
   ];
+  frames.push(breathe(frames[0]!, 38), breathe(frames[3]!, 38), breathe(frames[6]!, 46));
   frames.forEach((f, i) => ctx.drawImage(f, (i % CHAR_COLS) * CHAR_W, Math.floor(i / CHAR_COLS) * CHAR_H));
   return canvas;
 }

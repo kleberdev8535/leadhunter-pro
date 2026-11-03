@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { TILE, stationById, roomAt } from "../map/OfficeMap";
+import { POINTS_OF_INTEREST, TILE, stationById } from "../map/OfficeMap";
 import type { CollisionSystem, Point } from "../systems/CollisionSystem";
 import type { StationOccupancy } from "../systems/StationOccupancy";
 import { AgentMovementController } from "./AgentMovementController";
@@ -9,7 +9,12 @@ import { CHAR_H } from "../sprites/iso-characters";
 import { behaviorFor, type AgentStatus, type Behavior } from "../agents/behavior";
 import type { OfficeAgent } from "../bridge";
 
-type Mode = "walking" | "seated" | "standing" | "celebrating";
+type Mode = "walking" | "seated" | "standing" | "celebrating" | "outing" | "visiting";
+
+/** Pontos de passeio ocupados agora (um agente por ponto). */
+const reservedPoi = new Map<number, string>();
+const WANDER_MIN_MS = 14_000;
+const WANDER_RANDOM_MS = 26_000;
 
 /**
  * Um agente no mapa. Recebe o status real do backend, decide o destino (estação ou descanso)
@@ -28,6 +33,8 @@ export class AgentController {
   private progress: number | null = null;
   private nextWander = 0;
   private seatedAt: string | null = null;
+  private poi: number | null = null;
+  private visitUntil = 0;
   status: AgentStatus;
 
   constructor(
@@ -121,6 +128,7 @@ export class AgentController {
 
   private retarget() {
     if (this.mode === "celebrating") return;
+    this.releasePoi();
     const target = this.resolveTarget();
     this.container.setVisible(this.behavior.place !== "none");
     if (!target) return this.sync();
@@ -153,8 +161,55 @@ export class AgentController {
       this.move.dir = atStation ? "up" : "down";
       this.face(this.move.dir, "idle");
     }
-    this.nextWander = this.scene.time.now + 5000 + Math.random() * 6000;
+    this.nextWander = this.scene.time.now + WANDER_MIN_MS + Math.random() * WANDER_RANDOM_MS;
     this.sync();
+  }
+
+  private releasePoi() {
+    if (this.poi !== null && reservedPoi.get(this.poi) === this.id) reservedPoi.delete(this.poi);
+    this.poi = null;
+  }
+
+  /** Levanta da mesa e vai até um ponto livre (café, água, corredor, janela…). A cadeira continua reservada. */
+  private startOuting(now: number) {
+    const free = POINTS_OF_INTEREST.map((p, i) => ({ p, i })).filter(
+      ({ p, i }) => !reservedPoi.has(i) && !this.collision.isBlocked(p.x, p.y, this.id),
+    );
+    if (free.length === 0) {
+      this.nextWander = now + 8000;
+      return;
+    }
+    const pick = free[Math.floor(Math.random() * free.length)]!;
+    reservedPoi.set(pick.i, this.id);
+    this.poi = pick.i;
+    this.leaveSeat();
+    this.mode = "outing";
+    if (!this.move.goTo(pick.p, () => this.reachPoi(pick.p.face))) {
+      this.releasePoi();
+      this.goBackToSeat();
+    }
+  }
+
+  private reachPoi(face: "down" | "left" | "right" | "up") {
+    this.mode = "visiting";
+    this.move.dir = face;
+    // Às vezes acena (como quem cumprimenta alguém); senão fica parado, respirando.
+    if (Math.random() < 0.35) {
+      this.sprite.setFlipX(false);
+      this.sprite.play(animKey(this.data.kind, "wave"));
+      this.sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+        if (this.mode === "visiting") this.face(face, "idle");
+      });
+    } else this.face(face, "idle");
+    this.visitUntil = this.scene.time.now + 3500 + Math.random() * 5000;
+  }
+
+  private goBackToSeat() {
+    this.releasePoi();
+    const seat = this.resolveTarget();
+    if (!seat) return this.arrive();
+    this.mode = "walking";
+    this.move.goTo(seat, () => this.arrive());
   }
 
   private sync() {
@@ -184,16 +239,11 @@ export class AgentController {
 
   tick(delta: number, now: number) {
     const walking = this.move.update(delta, now);
-    if (walking && this.mode === "walking") this.face(this.move.dir, "walk");
-    // Pequenas voltas na sala de descanso, só quando o agente está livre.
-    if (!walking && this.mode === "standing" && this.behavior.wander && now > this.nextWander) {
-      this.occupancy.releaseLoungeSpot(this.id);
-      const spot = this.occupancy.claimLoungeSpot(this.id, Math.floor(Math.random() * 7));
-      if (spot && roomAt(spot.x, spot.y)?.id === "lounge") {
-        this.mode = "walking";
-        this.move.goTo(spot, () => this.arrive());
-      } else this.nextWander = now + 4000;
-    }
+    if (walking && (this.mode === "walking" || this.mode === "outing")) this.face(this.move.dir, "walk");
+    // Vida no escritório: quem está livre (sentado sem digitar) levanta de vez em quando para passear.
+    const idleSeated = this.mode === "seated" && this.behavior.pose !== "type";
+    if (!walking && idleSeated && this.behavior.wander && now > this.nextWander) this.startOuting(now);
+    if (this.mode === "visiting" && now > this.visitUntil) this.goBackToSeat();
 
     const seated = this.mode === "seated";
     // Grade (px) → tile fracionário → tela isométrica (centro do losango = pés).
@@ -213,6 +263,7 @@ export class AgentController {
   }
 
   destroy() {
+    this.releasePoi();
     this.leaveSeat();
     this.collision.releaseAll(this.id);
     this.occupancy.releaseStation(this.id);

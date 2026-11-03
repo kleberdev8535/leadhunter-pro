@@ -170,6 +170,22 @@ export const LOUNGE_SPOTS: readonly { x: number; y: number }[] = [
   { x: 35, y: 24 }, { x: 40, y: 24 }, { x: 37, y: 21 }, { x: 41, y: 21 }, { x: 34, y: 21 }, { x: 38, y: 26 }, { x: 33, y: 23 },
 ];
 
+/** Lugares para onde agentes livres vão passear (cafeteira, bebedouro, corredor, janelas…). */
+export const POINTS_OF_INTEREST: readonly { x: number; y: number; face: "down" | "left" | "right" | "up"; label: string }[] = [
+  { x: 39, y: 20, face: "up", label: "café" },
+  { x: 40, y: 20, face: "up", label: "café" },
+  { x: 42, y: 20, face: "up", label: "água" },
+  { x: 36, y: 24, face: "down", label: "sofá" },
+  { x: 40, y: 23, face: "down", label: "descanso" },
+  { x: 10, y: 15, face: "down", label: "corredor" },
+  { x: 22, y: 15, face: "down", label: "corredor" },
+  { x: 33, y: 16, face: "down", label: "corredor" },
+  { x: 4, y: 2, face: "up", label: "janela" },
+  { x: 20, y: 2, face: "up", label: "janela" },
+  { x: 32, y: 3, face: "up", label: "janela" },
+  { x: 8, y: 24, face: "down", label: "recepção" },
+];
+
 export const WALL_DECOR: readonly WallDecor[] = [
   { type: "whiteboard", x: 6, y: 1, w: 2 },
   { type: "clock", x: 13, y: 1, w: 1 },

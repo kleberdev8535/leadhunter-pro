@@ -79,6 +79,19 @@ export class AgentMovementController {
     cb?.();
   }
 
+  /** Sai da frente: vai para um tile vizinho livre e, ao chegar, recalcula a rota. */
+  private sidestep() {
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]].sort(() => Math.random() - 0.5);
+    for (const [dx, dy] of dirs) {
+      const x = this.tile.x + dx!;
+      const y = this.tile.y + dy!;
+      if (!this.collision.isBlocked(x, y, this.agentId)) {
+        this.path = [{ x, y }];
+        return;
+      }
+    }
+  }
+
   /** Avança o movimento. Retorna true enquanto está andando. */
   update(deltaMs: number, now: number): boolean {
     if (!this.next) {
@@ -88,10 +101,17 @@ export class AgentMovementController {
       if (!this.collision.occupy(this.agentId, step.x, step.y)) {
         // Tem alguém no caminho: espera e, se persistir, recalcula desviando.
         this.waited++;
-        this.waitUntil = now + WAIT_MS;
+        // Espera com variação aleatória: dois agentes de frente não recalculam no mesmo instante.
+        this.waitUntil = now + WAIT_MS + Math.random() * 400;
         if (this.waited >= MAX_WAITS) {
           this.waited = 0;
-          this.plan(true);
+          const replanned = this.plan(true);
+          const first = this.path[0];
+          // Rota nova ainda bloqueada (dois agentes de frente): um deles dá um passo para o lado.
+          // O sorteio quebra a simetria para os dois não desviarem ao mesmo tempo.
+          if ((!replanned || !first || this.collision.isBlocked(first.x, first.y, this.agentId)) && Math.random() < 0.6) {
+            this.sidestep();
+          }
         }
         return true;
       }
@@ -111,7 +131,13 @@ export class AgentMovementController {
       this.collision.release(this.agentId, this.tile.x, this.tile.y);
       this.tile = this.next;
       this.next = null;
-      if (this.path.length === 0) this.finish();
+      if (this.path.length === 0) {
+        const atGoal = this.goal && this.tile.x === this.goal.x && this.tile.y === this.goal.y;
+        // Depois de um passo para o lado, recalcula a rota até o destino real.
+        if (!atGoal && this.goal) {
+          if (!this.plan(true)) this.finish();
+        } else this.finish();
+      }
     } else {
       this.pos.x += Math.sign(dx) * Math.min(dist, Math.abs(dx));
       this.pos.y += Math.sign(dy) * Math.min(dist, Math.abs(dy));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FURNITURE, LOUNGE_SPOTS, MAP_H, MAP_W, ROOMS, STATIONS, TILES, roomAt } from "./map/OfficeMap";
+import { FURNITURE, LOUNGE_SPOTS, MAP_H, MAP_W, POINTS_OF_INTEREST, ROOMS, STATIONS, TILES, roomAt } from "./map/OfficeMap";
 import { CollisionSystem } from "./systems/CollisionSystem";
 import { findPath } from "./systems/Pathfinding";
 import { StationOccupancy } from "./systems/StationOccupancy";
@@ -31,6 +31,18 @@ describe("mapa do escritório", () => {
     const points = [...STATIONS.map((s) => s.seat), ...LOUNGE_SPOTS];
     for (const p of points) expect(blocked(p.x, p.y)).toBe(false);
     for (const a of points) for (const b of points) expect(findPath(a, b, blocked), `${JSON.stringify(a)}→${JSON.stringify(b)}`).not.toBeNull();
+  });
+
+  it("todo ponto de passeio é livre e alcançável a partir de qualquer cadeira (ida e volta)", () => {
+    const c = new CollisionSystem();
+    const blocked = (x: number, y: number) => c.isStaticBlocked(x, y);
+    for (const p of POINTS_OF_INTEREST) {
+      expect(blocked(p.x, p.y), p.label).toBe(false);
+      for (const s of STATIONS) {
+        expect(findPath(s.seat, p, blocked), `${s.id}→${p.label}`).not.toBeNull();
+        expect(findPath(p, s.seat, blocked), `${p.label}→${s.id}`).not.toBeNull();
+      }
+    }
   });
 
   it("os lugares de descanso ficam na sala de descanso", () => {
@@ -101,6 +113,45 @@ describe("colisão entre agentes", () => {
   });
 });
 
+describe("impasse entre agentes", () => {
+  it("dois agentes andando de frente um para o outro se desviam e ambos chegam", () => {
+    for (let run = 0; run < 20; run++) {
+      const c = new CollisionSystem();
+      const a = new AgentMovementController("a", c, { x: 5, y: 15 });
+      const b = new AgentMovementController("b", c, { x: 15, y: 15 });
+      let doneA = false;
+      let doneB = false;
+      a.goTo({ x: 15, y: 15 }, () => (doneA = true));
+      b.goTo({ x: 5, y: 15 }, () => (doneB = true));
+      let now = 0;
+      for (let i = 0; i < 6000 && !(doneA && doneB); i++) {
+        now += 16;
+        a.update(16, now);
+        b.update(16, now);
+        expect(a.tile).not.toEqual(b.tile);
+      }
+      expect(doneA && doneB, `rodada ${run}`).toBe(true);
+    }
+  });
+
+  it("também resolve o encontro numa porta estreita", () => {
+    const c = new CollisionSystem();
+    const a = new AgentMovementController("a", c, { x: 7, y: 11 });
+    const b = new AgentMovementController("b", c, { x: 7, y: 14 });
+    let doneA = false;
+    let doneB = false;
+    a.goTo({ x: 7, y: 15 }, () => (doneA = true));
+    b.goTo({ x: 7, y: 10 }, () => (doneB = true));
+    let now = 0;
+    for (let i = 0; i < 8000 && !(doneA && doneB); i++) {
+      now += 16;
+      a.update(16, now);
+      b.update(16, now);
+    }
+    expect(doneA && doneB).toBe(true);
+  });
+});
+
 describe("ocupação de estações", () => {
   it("duas pessoas não sentam na mesma cadeira", () => {
     const o = new StationOccupancy();
@@ -130,6 +181,12 @@ describe("visual segue o backend", () => {
       expect(b.pose === "type").toBe(s === "WORKING");
       expect(b.showProgress).toBe(s === "WORKING");
     }
+  });
+
+  it("só agentes livres passeiam; quem tem tarefa nunca sai da mesa", () => {
+    expect(behaviorFor("AVAILABLE").wander).toBe(true);
+    expect(behaviorFor("IDLE").wander).toBe(true);
+    for (const s of ["WORKING", "ASSIGNED", "WAITING", "PAUSED", "ERROR", "OFFLINE"] as AgentStatus[]) expect(behaviorFor(s).wander).toBe(false);
   });
 
   it("agentes livres ficam sentados na própria mesa, sem digitar", () => {

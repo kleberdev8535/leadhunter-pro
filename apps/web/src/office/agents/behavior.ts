@@ -46,8 +46,9 @@ export function behaviorFor(status: AgentStatus): Behavior {
     case "AVAILABLE":
     case "IDLE":
     default:
-      // Livres ficam sentados na própria mesa, monitor desligado; só WORKING digita.
-      return { place: "station", pose: "sit", badge: "none", wander: false, showProgress: false };
+      // Livres ficam na própria mesa (monitor desligado) e de vez em quando levantam para passear.
+      // Só WORKING digita: o passeio nunca é apresentado como trabalho.
+      return { place: "station", pose: "sit", badge: "none", wander: true, showProgress: false };
   }
 }
 
